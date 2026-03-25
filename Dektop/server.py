@@ -1,4 +1,5 @@
 import time
+import re
 import serial
 import serial.tools.list_ports
 
@@ -43,26 +44,96 @@ def send_commands_and_print(opened_ports, commands, read_timeout=2.0):
     for p, ser in opened_ports:
         dev = p.device
         try:
-            for cmd in commands:
-                data = (cmd + "\r\n").encode("utf-8")
-                ser.write(data)
-                ser.flush()
-                print(f"Sent to {dev}: {cmd}")
-
-                # Read responses for a short window after sending
-                end_time = time.time() + read_timeout
-                while time.time() < end_time:
-                    line = ser.readline()
-                    if line:
-                        text = line.decode("utf-8")
-                        text = text.strip()
-                        print(f"{dev} -> {text}")
-                    else:
-                        # small sleep to avoid tight loop
-                        time.sleep(0.05)
+            send_initial_command(ser)
+            color = process_temperature(ser)
+            if color is not None:
+                print(f"Device {dev} color: {color}")
         except Exception as e:
             print(f"Error communicating with {dev}: {e}")
 
+def read_response(ser):
+    end_time = time.time() + READ_TIMEOUT
+    while time.time() < end_time:
+        line = ser.readline()
+        if line:
+            try:
+                text = line.decode("utf-8")
+            except UnicodeDecodeError:
+                # Fall back to latin-1 which maps bytes directly to unicode codepoints
+                text = line.decode("latin-1", errors="replace")
+            except Exception:
+                text = repr(line)
+            return text.strip()
+    return None
+
+def send_initial_command(ser):
+    try:
+        data = (COMMANDS[0] + "\n").encode("utf-8")
+        ser.write(data)
+        ser.flush()
+        print(f"Sent: {COMMANDS[0]}")
+        print(read_response(ser))
+    except Exception as e:
+        print(f"Error sending initial command: {e}")
+    
+def process_temperature(source):
+    if hasattr(source, "write") and hasattr(source, "read"):
+        ser = source
+        try:
+            data = (COMMANDS[1] + "\n").encode("utf-8")
+            ser.write(data)
+            ser.flush()
+            print(f"Sent: {COMMANDS[1]}")
+            response = read_response(ser)
+            if response is None:
+                print("No response for temperature command")
+                return None
+            temp = parse_data(response)
+            if temp is None:
+                print(f"Response (unparsed): {response}")
+                return None
+            color = compute_color_from_temp(temp)
+            print(f"Parsed temperature: {temp} -> color {color}")
+            return color
+        except Exception as e:
+            print(f"Error during process_temperature(serial): {e}")
+            return None
+
+    # Otherwise treat source as numeric temperature
+    try:
+        temp = float(source)
+    except Exception:
+        return None
+    return compute_color_from_temp(temp)
+
+# Process temperature value and return corresponding RGB color as a list of integers [R, G, B]
+def parse_data(s):
+    """Parse a string of the form <DATA:X> and return float(X) or None."""
+    if not s:
+        return None
+    m = re.search(r"<DATA:\s*([+-]?\d+(?:\.\d+)?)\s*>", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except Exception:
+        return None
+
+
+def compute_color_from_temp(temp):
+    """Return RGB color for given temperature (float)."""
+    color = [0, 0, 0]
+    if temp < 18:
+        color = [0, 0, 255]  # blue
+    elif temp < 22:
+        color = [0, 255, 255]  # Azure
+    elif temp < 25:
+        color = [0, 255, 0]  # green
+    elif temp < 28:
+        color = [255, 255, 0]  # yellow
+    else:
+        color = [255, 0, 0]  # red
+    return color
 
 def main():
     matches = find_silabs_ports()
