@@ -18,7 +18,7 @@ STARTUP_COLOR_SEQUENCE = [
     [255, 255, 0], # yellow
     [255, 0, 0],   # red
 ]
-STARTUP_HOLD_SECS = 2.0
+STARTUP_HOLD_SECS = 1.0
 
 
 # Find serial ports that match KEYWORDS in their description or manufacturer fields

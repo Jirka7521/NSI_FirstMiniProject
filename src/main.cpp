@@ -38,6 +38,7 @@ const char returnConnection[] = "<PONG:PICO_OK>" ;
 const char initConnection[] = "<PING>" ;
 const char requestTemperature[] = "<SET_T:" ;
 const char returnTemperature[] = "<DATA:" ;
+const char setRGB[] = "<SET_RGB:" ;
 
 void setup() {
   Serial.begin(9600);
@@ -87,6 +88,27 @@ void processInput()
       String numberStr = input.substring(strlen(requestTemperature));
       float time = numberStr.toFloat();
       sendTemperature(time);
+    }
+    else if (input.startsWith(setRGB))
+    {
+      // Expect data in format "R,G,B>" after the prefix. No reply sent.
+      String data = input.substring(strlen(setRGB));
+      // Remove trailing '>' if present
+      if (data.endsWith(">")) {
+        data = data.substring(0, data.length() - 1);
+      }
+      int firstComma = data.indexOf(',');
+      int secondComma = data.indexOf(',', firstComma + 1);
+      if (firstComma > 0 && secondComma > firstComma) {
+        int r = data.substring(0, firstComma).toInt();
+        int g = data.substring(firstComma + 1, secondComma).toInt();
+        int b = data.substring(secondComma + 1).toInt();
+        // Clamp values to 0-255
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+        setLEDs((uint8_t)r, (uint8_t)g, (uint8_t)b);
+      }
     }
     else
     {
