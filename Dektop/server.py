@@ -8,9 +8,13 @@ KEYWORDS = ("silicon", "silabs", "cp210")
 
 # Global configuration
 BAUD = 9600
-READ_TIMEOUT = 10.0  # seconds to read responses after sending each command
+READ_TIMEOUT = 1.0  # seconds to read responses after sending each command
 COMMANDS = ["<PING>", "<SET_T:1000>"]  # list of commands to send, without terminators
-# Sequence of RGB colors for startup test (kept for 2 seconds each)
+KEEP_ALIVE_INTERVAL = 15.0  # send <KEEP_ALIVE> every 15 seconds
+RECONNECT_SCAN_INTERVAL = 5.0  # scan for new devices every 5 seconds
+STARTUP_COLOR_TEST = False  # perform startup LED color test when a device is opened
+TEMP_REQUEST_INTERVAL = 5.0  # seconds between temperature requests per device
+# Sequence of RGB colors for startup test (kept for STARTUP_HOLD_SECS each)
 STARTUP_COLOR_SEQUENCE = [
     [0, 0, 255],   # blue
     [0, 255, 255], # azure
@@ -18,7 +22,7 @@ STARTUP_COLOR_SEQUENCE = [
     [255, 255, 0], # yellow
     [255, 0, 0],   # red
 ]
-STARTUP_HOLD_SECS = 1.0
+STARTUP_HOLD_SECS = 2.0
 
 
 # Find serial ports that match KEYWORDS in their description or manufacturer fields
@@ -162,24 +166,106 @@ def compute_color_from_temp(temp):
     return color
 
 def main():
-    matches = find_silabs_ports()
-    if not matches:
-        print("No matching devices found.")
-        return
-
-    print(f"Found {len(matches)} device(s):")
-    for p in matches:
-        print(f" - {p.device}: {p.description or p.hwid or 'unknown'}")
-
-    opened = open_ports(matches, BAUD)
-    commands = COMMANDS
+    # Persistent manager: maintain opened ports, send KEEP_ALIVE every KEEP_ALIVE_INTERVAL
+    opened = {}  # device -> {'port': PortInfo, 'ser': Serial, 'next_keepalive': float}
+    last_scan = 0.0
 
     try:
-        send_commands_and_print(opened, commands, read_timeout=READ_TIMEOUT)
+        while True:
+            now = time.monotonic()
+
+            # Scan for new ports periodically
+            if now - last_scan >= RECONNECT_SCAN_INTERVAL:
+                ports = find_silabs_ports()
+                # Add new ports
+                for p in ports:
+                    dev = p.device
+                    if dev not in opened:
+                        try:
+                            ser = serial.Serial(dev, baudrate=BAUD, timeout=1)
+                            print(f"Opened: {dev} — {p.description or 'no description'}")
+                            # Perform startup sequence and initial ping
+                            if STARTUP_COLOR_TEST:
+                                perform_startup_color_sequence(ser)
+                            send_initial_command(ser)
+                            opened[dev] = {
+                                'port': p,
+                                'ser': ser,
+                                'next_keepalive': now + KEEP_ALIVE_INTERVAL,
+                                'next_temp': now + TEMP_REQUEST_INTERVAL,
+                            }
+                        except Exception as e:
+                            print(f"Failed to open {dev}: {e}")
+                # Remove ports that disappeared
+                current_devices = {p.device for p in serial.tools.list_ports.comports()}
+                to_remove = [dev for dev in opened.keys() if dev not in current_devices]
+                for dev in to_remove:
+                    try:
+                        print(f"Port disappeared, closing: {dev}")
+                        opened[dev]['ser'].close()
+                    except Exception:
+                        pass
+                    del opened[dev]
+
+                last_scan = now
+
+            # Handle keep-alive for opened ports
+            for dev, info in list(opened.items()):
+                ser = info['ser']
+                try:
+                    if now >= info['next_keepalive']:
+                        cmd = "<KEEP_ALIVE>"
+                        ser.write((cmd + "\n").encode('utf-8'))
+                        ser.flush()
+                        print(f"Sent: {cmd} to {dev}")
+                        # read any response briefly
+                        resp = read_response(ser)
+                        if resp:
+                            print(f"{dev} -> {resp}")
+                        info['next_keepalive'] = now + KEEP_ALIVE_INTERVAL
+                    # Periodic temperature request and color refresh
+                    if now >= info.get('next_temp', 0):
+                        try:
+                            tcmd = "<SET_T:0>"  # request immediate temperature
+                            ser.write((tcmd + "\n").encode('utf-8'))
+                            ser.flush()
+                            print(f"Sent: {tcmd} to {dev}")
+                            resp = read_response(ser)
+                            if resp:
+                                print(f"{dev} -> {resp}")
+                                temp = parse_data(resp)
+                                if temp is not None:
+                                    color = compute_color_from_temp(temp)
+                                    # send color update
+                                    rgb_cmd = f"<SET_RGB:{color[0]},{color[1]},{color[2]}>"
+                                    ser.write((rgb_cmd + "\n").encode('utf-8'))
+                                    ser.flush()
+                                    print(f"Sent: {rgb_cmd} to {dev}")
+                                else:
+                                    print(f"Temperature response unparsed: {resp}")
+                            else:
+                                print(f"No temperature response from {dev}")
+                        except Exception as e:
+                            print(f"Error requesting temperature from {dev}: {e}")
+                        finally:
+                            info['next_temp'] = now + TEMP_REQUEST_INTERVAL
+                except (serial.SerialException, OSError) as e:
+                    print(f"Serial error on {dev}: {e}; closing and will attempt reconnect")
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    del opened[dev]
+                except Exception as e:
+                    print(f"Unexpected error for {dev}: {e}")
+
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        print("Exiting, closing ports")
     finally:
-        for p, ser in opened:
+        for dev, info in opened.items():
             try:
-                ser.close()
+                info['ser'].close()
             except Exception:
                 pass
 

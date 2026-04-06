@@ -5,11 +5,13 @@
 
 #define DHTTYPE DHT11
 // Use a GPIO that supports bidirectional digital I/O (not input-only RTC pins)
-const uint8_t DHT_PIN = 12; // GPIO16 (Next to ground next to VCC)
+const uint8_t DHT_PIN = 0; // GPIO16 (Next to ground next to VCC)
 // LED PWM pins (three separate ports). Adjust pins to your hardware if needed.
 const uint8_t LED_R_PIN = 27; // Red channel
 const uint8_t LED_G_PIN = 25; // Green channel
 const uint8_t LED_B_PIN = 32; // Blue channel
+// Keep-alive LED (separate single-color LED) — change if your hardware uses a different pin
+const uint8_t KEEP_ALIVE_PIN = 4;
 
 // ESP32 LEDC PWM configuration
 const uint8_t LEDC_CHANNEL_R = 0;
@@ -30,10 +32,30 @@ void initialConnection();
 void sendTemperature(float time);
 void performTemperatureSend();
 void setLEDs(uint8_t r, uint8_t g, uint8_t b);
+void triggerKeepAlivePulse();
 float readDHT11Temperature();
 bool isConnected = false;
 unsigned long scheduledSendTime = 0;
 bool sendScheduled = false;
+// Connection / keep-alive timer
+unsigned long lastValidCommandTime = 0; // millis of last valid command
+const unsigned long CONNECT_TIMEOUT_MS = 20000UL; // 20 seconds
+
+// Short LED pulse when receiving a valid command
+unsigned long ledPulseEndTime = 0;
+bool ledPulseOn = false;
+
+// Current RGB state (persist until changed)
+uint8_t currR = 0;
+uint8_t currG = 0;
+uint8_t currB = 0;
+
+// Blink sequence when considered disconnected
+unsigned long lastBlinkSequenceStart = 0;
+bool inBlinkSequence = false;
+const unsigned long BLINK_SEQUENCE_INTERVAL = 5000UL; // every 5 seconds
+const unsigned long BLINK_PHASE_MS = 100UL; // 100ms on/off phases
+
 const char returnConnection[] = "<PONG:PICO_OK>" ;
 const char initConnection[] = "<PING>" ;
 const char requestTemperature[] = "<SET_T:" ;
@@ -54,6 +76,9 @@ void setup() {
   ledcWrite(LEDC_CHANNEL_R, 0);
   ledcWrite(LEDC_CHANNEL_G, 0);
   ledcWrite(LEDC_CHANNEL_B, 0);
+  // Keep-alive pin
+  pinMode(KEEP_ALIVE_PIN, OUTPUT);
+  digitalWrite(KEEP_ALIVE_PIN, HIGH);
   // Set LEDs according to LED_BOOT_ON at startup (no handler)
   if (LED_BOOT_ON) {
     setLEDs(255, 255, 255);
@@ -71,6 +96,48 @@ void loop() {
     performTemperatureSend();
     sendScheduled = false;
   }
+
+  unsigned long now = millis();
+
+  // Turn off short LED pulse after 50ms
+  if (ledPulseOn && now >= ledPulseEndTime) {
+    ledPulseOn = false;
+    digitalWrite(KEEP_ALIVE_PIN, HIGH);
+  }
+
+  // Determine connection state
+  bool connectedNow = (lastValidCommandTime != 0 && (now - lastValidCommandTime) <= CONNECT_TIMEOUT_MS);
+
+  // If disconnected, start blink sequences every BLINK_SEQUENCE_INTERVAL
+  if (!connectedNow) {
+    if (!inBlinkSequence && (now - lastBlinkSequenceStart >= BLINK_SEQUENCE_INTERVAL)) {
+      inBlinkSequence = true;
+      lastBlinkSequenceStart = now; // mark start of this sequence
+    }
+  } else {
+    // reset blink state when connected
+    inBlinkSequence = false;
+    lastBlinkSequenceStart = now;
+  }
+
+  // Handle blink sequence non-blocking: 3 blinks -> 6 phases (on/off)
+  if (inBlinkSequence) {
+    unsigned long seqElapsed = now - lastBlinkSequenceStart;
+    unsigned long phase = seqElapsed / BLINK_PHASE_MS;
+    if (phase < 6) {
+      // even phases -> keep-alive LED on, odd -> off
+      if ((phase % 2) == 0) {
+        digitalWrite(KEEP_ALIVE_PIN, LOW);
+      } else {
+        digitalWrite(KEEP_ALIVE_PIN, HIGH);
+      }
+    } else {
+      // sequence finished
+      inBlinkSequence = false;
+      lastBlinkSequenceStart = now;
+      digitalWrite(KEEP_ALIVE_PIN, HIGH);
+    }
+  }
 }
 
 void processInput()
@@ -82,9 +149,15 @@ void processInput()
     if (input == initConnection)
     {
       initialConnection();
+      // mark last valid command and short LED pulse
+      lastValidCommandTime = millis();
+      triggerKeepAlivePulse();
     }
     else if (input.startsWith(requestTemperature))
     {
+      // mark last valid command and short LED pulse
+      lastValidCommandTime = millis();
+      triggerKeepAlivePulse();
       String numberStr = input.substring(strlen(requestTemperature));
       float time = numberStr.toFloat();
       sendTemperature(time);
@@ -108,6 +181,9 @@ void processInput()
         if (g < 0) g = 0; else if (g > 255) g = 255;
         if (b < 0) b = 0; else if (b > 255) b = 255;
         setLEDs((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        // mark last valid command and short LED pulse
+        lastValidCommandTime = millis();
+        triggerKeepAlivePulse();
       }
     }
     else
@@ -122,6 +198,8 @@ void initialConnection()
 {
   Serial.println(returnConnection);
   isConnected = true;
+  // pulse keep-alive LED for this transmit
+  triggerKeepAlivePulse();
 }
 
 void sendTemperature(float time)
@@ -140,8 +218,10 @@ void performTemperatureSend()
   float temperature = readDHT11Temperature();
   if (isnan(temperature)) {
     Serial.println("Failed to read from DHT sensor!");
+    triggerKeepAlivePulse();
   } else {
     Serial.println(returnTemperature + String(temperature) + ">");
+    triggerKeepAlivePulse();
   }
 }
 
@@ -152,6 +232,10 @@ void setLEDs(uint8_t r, uint8_t g, uint8_t b)
   ledcWrite(LEDC_CHANNEL_R, 255 - r);
   ledcWrite(LEDC_CHANNEL_G, 255 - g);
   ledcWrite(LEDC_CHANNEL_B, 255 - b);
+  // store current values so color persists until next set
+  currR = r;
+  currG = g;
+  currB = b;
 }
 
 /// @brief Reads the temperature from the DHT11 sensor and returns it as a float. If the reading fails, it returns NaN.
@@ -163,4 +247,12 @@ float readDHT11Temperature()
     return NAN;
   }
   return t;
+}
+
+// Trigger a short keep-alive LED pulse (50 ms)
+void triggerKeepAlivePulse()
+{
+  digitalWrite(KEEP_ALIVE_PIN, LOW);
+  ledPulseOn = true;
+  ledPulseEndTime = millis() + 50UL;
 }
