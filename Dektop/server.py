@@ -66,6 +66,7 @@ def send_commands_and_print(opened_ports, commands, read_timeout=2.0):
         except Exception as e:
             print(f"Error communicating with {dev}: {e}")
 
+# Read lines from the serial port for a certain time after sending a command, and return the last line decoded as UTF-8 (with fallback) or None if no response
 def read_response(ser):
     end_time = time.time() + READ_TIMEOUT
     while time.time() < end_time:
@@ -81,6 +82,7 @@ def read_response(ser):
             return text.strip()
     return None
 
+# Send the initial command (e.g. <PING>) to the device and print the response
 def send_initial_command(ser):
     try:
         data = (COMMANDS[0] + "\n").encode("utf-8")
@@ -90,7 +92,8 @@ def send_initial_command(ser):
         print(read_response(ser))
     except Exception as e:
         print(f"Error sending initial command: {e}")
-    
+
+# Perform a startup sequence of RGB set commands to test the LEDs, holding each color for a configured time. This is optional and can be enabled with STARTUP_COLOR_TEST.
 def perform_startup_color_sequence(ser):
     """Send a sequence of RGB set commands to the device, holding each for STARTUP_HOLD_SECS."""
     try:
@@ -106,6 +109,8 @@ def perform_startup_color_sequence(ser):
             time.sleep(STARTUP_HOLD_SECS)
     except Exception as e:
         print(f"Error during startup color sequence: {e}")
+
+# Process temperature command: if source is a serial port, send the command and parse response; if source is numeric, compute color directly. Returns RGB color as list of integers or None on failure.
 def process_temperature(source):
     if hasattr(source, "write") and hasattr(source, "readline"):
         ser = source
@@ -149,7 +154,7 @@ def parse_data(s):
     except Exception:
         return None
 
-
+# Compute RGB color based on temperature thresholds. This is a simple mapping where cooler temperatures are blue and warmer temperatures are red, with intermediate colors in between.
 def compute_color_from_temp(temp):
     """Return RGB color for given temperature (float)."""
     color = [0, 0, 0]

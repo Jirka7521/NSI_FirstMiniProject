@@ -2,15 +2,14 @@
 #include <string>
 #include <stdio.h>
 #include <DHT.h>
-
 #define DHTTYPE DHT11
-// Use a GPIO that supports bidirectional digital I/O (not input-only RTC pins)
-const uint8_t DHT_PIN = 0; // GPIO16 (Next to ground next to VCC)
-// LED PWM pins (three separate ports). Adjust pins to your hardware if needed.
+
+const uint8_t DHT_PIN = 0;
+// LED PWM pins
 const uint8_t LED_R_PIN = 27; // Red channel
 const uint8_t LED_G_PIN = 25; // Green channel
 const uint8_t LED_B_PIN = 32; // Blue channel
-// Keep-alive LED (separate single-color LED) — change if your hardware uses a different pin
+// Keep-alive LED
 const uint8_t KEEP_ALIVE_PIN = 4;
 
 // ESP32 LEDC PWM configuration
@@ -26,7 +25,7 @@ DHT dht(DHT_PIN, DHTTYPE);
 // Set to true to turn LEDs ON at boot, false to keep them OFF
 const bool LED_BOOT_ON = false;
 
-// put function declarations here:
+// function declarations here:
 void processInput();
 void initialConnection();
 void sendTemperature(float time);
@@ -37,7 +36,7 @@ float readDHT11Temperature();
 bool isConnected = false;
 unsigned long scheduledSendTime = 0;
 bool sendScheduled = false;
-// Connection / keep-alive timer
+// Keep-alive timer
 unsigned long lastValidCommandTime = 0; // millis of last valid command
 const unsigned long CONNECT_TIMEOUT_MS = 20000UL; // 20 seconds
 
@@ -56,6 +55,7 @@ bool inBlinkSequence = false;
 const unsigned long BLINK_SEQUENCE_INTERVAL = 5000UL; // every 5 seconds
 const unsigned long BLINK_PHASE_MS = 100UL; // 100ms on/off phases
 
+// Command and response strings
 const char returnConnection[] = "<PONG:PICO_OK>" ;
 const char initConnection[] = "<PING>" ;
 const char requestTemperature[] = "<SET_T:" ;
@@ -79,24 +79,19 @@ void setup() {
   // Keep-alive pin
   pinMode(KEEP_ALIVE_PIN, OUTPUT);
   digitalWrite(KEEP_ALIVE_PIN, HIGH);
-  // Set LEDs according to LED_BOOT_ON at startup (no handler)
+  // Set LEDs according to LED_BOOT_ON at startup
   if (LED_BOOT_ON) {
     setLEDs(255, 255, 255);
-    delay(1000); // Keep LEDs on for 1 second at boot if enabled
-    setLEDs(0, 0, 0); // Then turn off
+    delay(1000);
+    setLEDs(0, 0, 0);
   } else {
     setLEDs(0, 0, 0);
   }
+  // Add event listener for serial input
   Serial.onReceive(processInput);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  if (sendScheduled && millis() >= scheduledSendTime) {
-    performTemperatureSend();
-    sendScheduled = false;
-  }
-
   unsigned long now = millis();
 
   // Turn off short LED pulse after 50ms
@@ -146,6 +141,8 @@ void processInput()
   {
     String input = Serial.readStringUntil('\n');
     input.trim(); // Remove any leading/trailing whitespace
+
+    // Init configuration command
     if (input == initConnection)
     {
       initialConnection();
@@ -153,6 +150,7 @@ void processInput()
       lastValidCommandTime = millis();
       triggerKeepAlivePulse();
     }
+    // Temperature request command
     else if (input.startsWith(requestTemperature))
     {
       // mark last valid command and short LED pulse
@@ -162,6 +160,7 @@ void processInput()
       float time = numberStr.toFloat();
       sendTemperature(time);
     }
+    // Set RGB command
     else if (input.startsWith(setRGB))
     {
       // Expect data in format "R,G,B>" after the prefix. No reply sent.
@@ -186,6 +185,7 @@ void processInput()
         triggerKeepAlivePulse();
       }
     }
+    // Unrecognized command - send the input back as a response for debugging
     else
     {
       Serial.println("Received: " + input);
