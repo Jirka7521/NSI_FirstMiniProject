@@ -10,6 +10,15 @@ KEYWORDS = ("silicon", "silabs", "cp210")
 BAUD = 9600
 READ_TIMEOUT = 10.0  # seconds to read responses after sending each command
 COMMANDS = ["<PING>", "<SET_T:1000>"]  # list of commands to send, without terminators
+# Sequence of RGB colors for startup test (kept for 2 seconds each)
+STARTUP_COLOR_SEQUENCE = [
+    [0, 0, 255],   # blue
+    [0, 255, 255], # azure
+    [0, 255, 0],   # green
+    [255, 255, 0], # yellow
+    [255, 0, 0],   # red
+]
+STARTUP_HOLD_SECS = 2.0
 
 
 # Find serial ports that match KEYWORDS in their description or manufacturer fields
@@ -44,6 +53,8 @@ def send_commands_and_print(opened_ports, commands, read_timeout=2.0):
     for p, ser in opened_ports:
         dev = p.device
         try:
+            # first perform a startup LED color sequence, then normal sequence
+            perform_startup_color_sequence(ser)
             send_initial_command(ser)
             color = process_temperature(ser)
             if color is not None:
@@ -76,8 +87,23 @@ def send_initial_command(ser):
     except Exception as e:
         print(f"Error sending initial command: {e}")
     
+def perform_startup_color_sequence(ser):
+    """Send a sequence of RGB set commands to the device, holding each for STARTUP_HOLD_SECS."""
+    try:
+        for rgb in STARTUP_COLOR_SEQUENCE:
+            cmd = f"<SET_RGB:{rgb[0]},{rgb[1]},{rgb[2]}>"
+            data = (cmd + "\n").encode("utf-8")
+            ser.write(data)
+            ser.flush()
+            print(f"Sent: {cmd}")
+            # Read any immediate response
+            print(read_response(ser))
+            # keep the color for the configured hold time
+            time.sleep(STARTUP_HOLD_SECS)
+    except Exception as e:
+        print(f"Error during startup color sequence: {e}")
 def process_temperature(source):
-    if hasattr(source, "write") and hasattr(source, "read"):
+    if hasattr(source, "write") and hasattr(source, "readline"):
         ser = source
         try:
             data = (COMMANDS[1] + "\n").encode("utf-8")
