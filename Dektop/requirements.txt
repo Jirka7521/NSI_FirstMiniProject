@@ -1,0 +1,3 @@
+# requirements for server.py
+# This Python service talks to serial devices via pyserial.
+pyserial>=3.4
