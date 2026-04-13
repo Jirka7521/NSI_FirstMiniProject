@@ -108,6 +108,7 @@ void loop() {
     if (!inBlinkSequence && (now - lastBlinkSequenceStart >= BLINK_SEQUENCE_INTERVAL)) {
       inBlinkSequence = true;
       lastBlinkSequenceStart = now; // mark start of this sequence
+      setLEDs(0, 0, 0); // Ensure main LEDs are off during disconnect
     }
   } else {
     // reset blink state when connected

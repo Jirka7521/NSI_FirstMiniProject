@@ -9,7 +9,19 @@ KEYWORDS = ("silicon", "silabs", "cp210")
 # Global configuration
 BAUD = 9600
 READ_TIMEOUT = 1.0  # seconds to read responses after sending each command
-COMMANDS = ["<PING>", "<SET_T:1000>"]  # list of commands to send, without terminators
+# All commands that the program sends to devices. Keep the original index usage
+# so existing references remain stable: index 0 = PING, index 1 = SET_T:1000
+COMMANDS_SEND = [
+    "<PING>",
+    "<SET_T:1000>",
+    "<KEEP_ALIVE>",
+    "<SET_T:0>",
+    "<SET_RGB:{r},{g},{b}>",
+]
+# Expected/received message patterns (kept as examples/templates)
+COMMANDS_RECIEVED = [
+    "<DATA:{value}>",
+]
 KEEP_ALIVE_INTERVAL = 15.0  # send <KEEP_ALIVE> every 15 seconds
 RECONNECT_SCAN_INTERVAL = 5.0  # scan for new devices every 5 seconds
 STARTUP_COLOR_TEST = False  # perform startup LED color test when a device is opened
@@ -85,10 +97,10 @@ def read_response(ser):
 # Send the initial command (e.g. <PING>) to the device and print the response
 def send_initial_command(ser):
     try:
-        data = (COMMANDS[0] + "\n").encode("utf-8")
+        data = (COMMANDS_SEND[0] + "\n").encode("utf-8")
         ser.write(data)
         ser.flush()
-        print(f"Sent: {COMMANDS[0]}")
+        print(f"Sent: {COMMANDS_SEND[0]}")
         print(read_response(ser))
     except Exception as e:
         print(f"Error sending initial command: {e}")
@@ -98,7 +110,7 @@ def perform_startup_color_sequence(ser):
     """Send a sequence of RGB set commands to the device, holding each for STARTUP_HOLD_SECS."""
     try:
         for rgb in STARTUP_COLOR_SEQUENCE:
-            cmd = f"<SET_RGB:{rgb[0]},{rgb[1]},{rgb[2]}>"
+            cmd = COMMANDS_SEND[4].format(r=rgb[0], g=rgb[1], b=rgb[2])
             data = (cmd + "\n").encode("utf-8")
             ser.write(data)
             ser.flush()
@@ -115,10 +127,10 @@ def process_temperature(source):
     if hasattr(source, "write") and hasattr(source, "readline"):
         ser = source
         try:
-            data = (COMMANDS[1] + "\n").encode("utf-8")
+            data = (COMMANDS_SEND[1] + "\n").encode("utf-8")
             ser.write(data)
             ser.flush()
-            print(f"Sent: {COMMANDS[1]}")
+            print(f"Sent: {COMMANDS_SEND[1]}")
             response = read_response(ser)
             if response is None:
                 print("No response for temperature command")
@@ -143,7 +155,6 @@ def process_temperature(source):
 
 # Process temperature value and return corresponding RGB color as a list of integers [R, G, B]
 def parse_data(s):
-    """Parse a string of the form <DATA:X> and return float(X) or None."""
     if not s:
         return None
     m = re.search(r"<DATA:\s*([+-]?\d+(?:\.\d+)?)\s*>", s)
@@ -156,7 +167,6 @@ def parse_data(s):
 
 # Compute RGB color based on temperature thresholds. This is a simple mapping where cooler temperatures are blue and warmer temperatures are red, with intermediate colors in between.
 def compute_color_from_temp(temp):
-    """Return RGB color for given temperature (float)."""
     color = [0, 0, 0]
     if temp < 18:
         color = [0, 0, 255]  # blue
@@ -173,7 +183,7 @@ def compute_color_from_temp(temp):
 def main():
     # Persistent manager: maintain opened ports, send KEEP_ALIVE every KEEP_ALIVE_INTERVAL
     opened = {}  # device -> {'port': PortInfo, 'ser': Serial, 'next_keepalive': float}
-    last_scan = 0.0
+    last_scan = READ_TIMEOUT
 
     try:
         while True:
@@ -220,7 +230,7 @@ def main():
                     ser = info['ser']
                     try:
                         if now >= info['next_keepalive']:
-                            cmd = "<KEEP_ALIVE>"
+                            cmd = COMMANDS_SEND[2]
                             ser.write((cmd + "\n").encode('utf-8'))
                             ser.flush()
                             print(f"Sent: {cmd} to {dev}")
@@ -232,7 +242,7 @@ def main():
                         # Periodic temperature request and color refresh
                         if now >= info.get('next_temp', 0):
                             try:
-                                tcmd = "<SET_T:0>"  # request immediate temperature
+                                tcmd = COMMANDS_SEND[3]  # request immediate temperature
                                 ser.write((tcmd + "\n").encode('utf-8'))
                                 ser.flush()
                                 print(f"Sent: {tcmd} to {dev}")
@@ -243,7 +253,7 @@ def main():
                                     if temp is not None:
                                         color = compute_color_from_temp(temp)
                                         # send color update
-                                        rgb_cmd = f"<SET_RGB:{color[0]},{color[1]},{color[2]}>"
+                                        rgb_cmd = COMMANDS_SEND[4].format(r=color[0], g=color[1], b=color[2])
                                         ser.write((rgb_cmd + "\n").encode('utf-8'))
                                         ser.flush()
                                         print(f"Sent: {rgb_cmd} to {dev}")
