@@ -1,0 +1,4 @@
+# requirements for main.cpp (Arduino/PlatformIO libraries)
+# These are not Python packages. Install via PlatformIO `lib_deps` or Arduino Library Manager.
+Adafruit Unified Sensor
+DHT sensor library (by Adafruit)
